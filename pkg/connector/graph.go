@@ -53,6 +53,18 @@ type Graph struct {
 	login *bridgev2.UserLogin // nil during sign-in
 	// refresh lets one refresh run at a time; meta.mu guards the fields themselves.
 	refresh sync.Mutex
+	saveMu  sync.Mutex
+}
+
+// save stores the login. UserLogin.Save is not safe to call from two goroutines at once,
+// and the poller and a token refresh for a Matrix event both save.
+func (g *Graph) save(ctx context.Context) error {
+	if g.login == nil {
+		return nil
+	}
+	g.saveMu.Lock()
+	defer g.saveMu.Unlock()
+	return g.login.Save(ctx)
 }
 
 func (tc *TeamsConnector) newGraph(meta *UserLoginMetadata, login *bridgev2.UserLogin) *Graph {
@@ -134,10 +146,8 @@ func (g *Graph) token(ctx context.Context) (string, error) {
 	g.meta.mu.Lock()
 	g.apply(tok)
 	g.meta.mu.Unlock()
-	if g.login != nil {
-		if err = g.login.Save(ctx); err != nil {
-			return "", fmt.Errorf("failed to save refreshed token: %w", err)
-		}
+	if err = g.save(ctx); err != nil {
+		return "", fmt.Errorf("failed to save refreshed token: %w", err)
 	}
 	return tok.AccessToken, nil
 }

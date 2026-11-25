@@ -89,6 +89,7 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 func (tc *TeamsClient) pollChat(ctx context.Context, meta *UserLoginMetadata, chat *graphChat, initialCutoff time.Time, recheck bool) error {
 	preview := stamp(chat.LastMessagePreview.CreatedDateTime)
 	st, known := meta.chat(chat.ID)
+	st.Cursor, st.Preview = restamp(st.Cursor), restamp(st.Preview)
 	switch {
 	case !known && chat.LastMessagePreview.CreatedDateTime.Before(initialCutoff):
 		// An old chat gets a room once somebody writes in it again.
@@ -111,7 +112,7 @@ func (tc *TeamsClient) pollChat(ctx context.Context, meta *UserLoginMetadata, ch
 		}
 	}
 	meta.setChat(chat.ID, st)
-	return tc.UserLogin.Save(ctx)
+	return tc.Graph.save(ctx)
 }
 
 func (tc *TeamsClient) syncNewChat(ctx context.Context, chat *graphChat, st *ChatState) error {

@@ -25,12 +25,13 @@ type TeamsClient struct {
 	UserLogin *bridgev2.UserLogin
 	Graph     *Graph
 
-	stop     context.CancelFunc
-	wg       sync.WaitGroup
-	rotate   int
-	readLock sync.Mutex
-	lastRead map[string]time.Time
-	names    sync.Map // ghost ID → display name from chat member lists
+	stop        context.CancelFunc
+	wg          sync.WaitGroup
+	rotate      int
+	readLock    sync.Mutex
+	lastRead    map[string]time.Time // chat → when Teams last got a mark
+	pendingRead map[string]time.Time // chat → newest receipt that waits for the end of readGap
+	names       sync.Map             // ghost ID → display name from chat member lists
 }
 
 var (

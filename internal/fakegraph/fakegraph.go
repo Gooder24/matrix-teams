@@ -151,6 +151,17 @@ func (s *Server) find(chatID, id string) map[string]any {
 
 func touch(m map[string]any) { m["lastModifiedDateTime"] = stamp(time.Now()) }
 
+// SetFail makes requests matching "METHOD path-regex" answer code; code 0 removes the rule.
+func (s *Server) SetFail(pattern string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if code == 0 {
+		delete(s.Fail, pattern)
+	} else {
+		s.Fail[pattern] = code
+	}
+}
+
 // Say adds a message from someone else. extra is merged into the message.
 func (s *Server) Say(chatID, from, html string, extra map[string]any) map[string]any {
 	s.mu.Lock()

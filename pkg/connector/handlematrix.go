@@ -328,12 +328,45 @@ func (tc *TeamsClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridg
 // from someone else, and only if every message from others since the room began is in the room:
 // Teams' read state is per chat, so an earlier receipt would mark unseen messages as seen.
 // History older than the room's first bridged message was never bridged and does not count.
+//
+// Marks of one chat stay readGap apart. A receipt inside the gap is checked when the gap ends, on its
+// own goroutine: bridgev2 runs this in the portal's event queue, which must not wait.
 func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.MatrixReadReceipt) error {
 	chat := chatOf(msg.Portal)
-	if err := tc.waitReadGap(ctx, chat); err != nil {
-		return err
+	tc.readLock.Lock()
+	if wait := readGap - time.Since(tc.lastRead[chat]); wait > 0 {
+		_, scheduled := tc.pendingRead[chat]
+		if msg.ReadUpTo.After(tc.pendingRead[chat]) {
+			tc.pendingRead[chat] = msg.ReadUpTo
+		}
+		tc.readLock.Unlock()
+		if !scheduled {
+			portal := msg.Portal
+			time.AfterFunc(wait, func() { tc.flushRead(portal) })
+		}
+		return nil
 	}
-	first, err := tc.Main.Bridge.DB.Message.GetFirstPortalMessage(ctx, msg.Portal.PortalKey)
+	tc.readLock.Unlock()
+	return tc.markRead(ctx, msg.Portal, msg.ReadUpTo)
+}
+
+func (tc *TeamsClient) flushRead(portal *bridgev2.Portal) {
+	chat := chatOf(portal)
+	tc.readLock.Lock()
+	upTo := tc.pendingRead[chat]
+	delete(tc.pendingRead, chat)
+	tc.readLock.Unlock()
+	log := tc.UserLogin.Log.With().Str("chat_id", chat).Logger()
+	ctx, cancel := context.WithTimeout(log.WithContext(tc.Main.Bridge.BackgroundCtx), time.Minute)
+	defer cancel()
+	if err := tc.markRead(ctx, portal, upTo); err != nil {
+		log.Warn().Err(err).Msg("Failed to mark Teams chat read")
+	}
+}
+
+func (tc *TeamsClient) markRead(ctx context.Context, portal *bridgev2.Portal, readUpTo time.Time) error {
+	chat := chatOf(portal)
+	first, err := tc.Main.Bridge.DB.Message.GetFirstPortalMessage(ctx, portal.PortalKey)
 	if err != nil || first == nil {
 		return err
 	}
@@ -360,7 +393,7 @@ func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 			newest = m
 		}
 	}
-	if newest == nil || msg.ReadUpTo.Before(newest.CreatedDateTime.Truncate(time.Millisecond)) {
+	if newest == nil || readUpTo.Before(newest.CreatedDateTime.Truncate(time.Millisecond)) {
 		return nil
 	}
 	tc.readLock.Lock()
@@ -372,23 +405,4 @@ func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 	m.mu.Unlock()
 	req := map[string]any{"user": map[string]string{"id": string(tc.ownID()), "tenantId": tenant}}
 	return tc.Graph.Do(ctx, http.MethodPost, "/chats/"+url.PathEscape(chat)+"/markChatReadForUser", req, nil)
-}
-
-// waitReadGap keeps marks of one chat readGap apart. A receipt inside the gap waits for its end
-// instead of being dropped, so the last receipt of a burst still reaches Teams.
-func (tc *TeamsClient) waitReadGap(ctx context.Context, chat string) error {
-	tc.readLock.Lock()
-	wait := readGap - time.Since(tc.lastRead[chat])
-	tc.readLock.Unlock()
-	if wait <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

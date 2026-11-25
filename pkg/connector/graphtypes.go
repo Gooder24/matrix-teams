@@ -47,9 +47,9 @@ type graphMember struct {
 type graphAttachment struct {
 	ID          string `json:"id"`
 	ContentType string `json:"contentType"`
-	ContentURL  string `json:"contentUrl"`
-	Content     string `json:"content"`
-	Name        string `json:"name"`
+	ContentURL  string `json:"contentUrl,omitempty"`
+	Content     string `json:"content,omitempty"`
+	Name        string `json:"name,omitempty"`
 }
 
 type graphMention struct {

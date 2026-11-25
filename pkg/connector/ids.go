@@ -81,3 +81,11 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 // stamp writes Graph's times with exactly three decimals, so that stamps compare correctly as strings.
 func stamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
+
+// restamp rewrites a stored stamp in stamp's format; earlier builds kept RFC 3339 with any number of decimals.
+func restamp(s string) string {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return stamp(t)
+	}
+	return s
+}

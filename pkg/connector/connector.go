@@ -57,10 +57,11 @@ func (tc *TeamsConnector) GetBridgeInfoVersion() (info, caps int) {
 func (tc *TeamsConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
 	meta := login.Metadata.(*UserLoginMetadata)
 	login.Client = &TeamsClient{
-		Main:      tc,
-		UserLogin: login,
-		Graph:     tc.newGraph(meta, login),
-		lastRead:  make(map[string]time.Time),
+		Main:        tc,
+		UserLogin:   login,
+		Graph:       tc.newGraph(meta, login),
+		lastRead:    make(map[string]time.Time),
+		pendingRead: make(map[string]time.Time),
 	}
 	return nil
 }

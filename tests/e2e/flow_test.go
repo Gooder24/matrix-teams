@@ -35,8 +35,12 @@ func TestBridge(t *testing.T) {
 	if !until(wait, func() bool { dm = c.roomWhere(isBody("do you have the")); return dm != "" }) {
 		t.Fatal("the DM with Bea never came")
 	}
-	group := c.roomWhere(func(e map[string]any) bool {
-		return e["type"] == "m.room.name" && str(e, "content", "name") == "Physics project"
+	group := ""
+	until(wait, func() bool {
+		group = c.roomWhere(func(e map[string]any) bool {
+			return e["type"] == "m.room.name" && str(e, "content", "name") == "Physics project"
+		})
+		return group != "" && c.find(group, isBody("Who makes the slides")) != nil
 	})
 	homework := c.find(dm, isBody("do you have the"))
 	homeworkTeams := fake.Messages(fakegraph.ChatDM)[1]["id"].(string)
@@ -178,6 +182,22 @@ func TestBridge(t *testing.T) {
 		}
 	})
 
+	t.Run("one failing chat does not stop the others", func(t *testing.T) {
+		const failGroup = `^GET /chats/19:group@thread\.v2/messages`
+		fake.SetFail(failGroup, 500)
+		// The group's message is newer, so the poll reaches the failing group before the DM.
+		fake.Say(fakegraph.ChatDM, fakegraph.Bea, "<p>still arrives</p>", nil)
+		later := time.Now().Add(time.Second).UTC().Format("2006-01-02T15:04:05.000Z")
+		fake.Say(fakegraph.ChatGroup, fakegraph.Cyril, "<p>held back</p>", map[string]any{"createdDateTime": later, "lastModifiedDateTime": later})
+		if !until(wait, func() bool { return c.find(dm, isBody("still arrives")) != nil }) {
+			t.Error("a failing group stopped the DM")
+		}
+		fake.SetFail(failGroup, 0)
+		if !until(wait, func() bool { return c.find(group, isBody("held back")) != nil }) {
+			t.Error("the group's message never came once the group worked again")
+		}
+	})
+
 	// sync waits until the bridge has polled the DM once more after a write, for checks that something did not happen.
 	sync := func(t *testing.T, tag string) {
 		fake.Say(fakegraph.ChatDM, fakegraph.Bea, "<p>sentinel "+tag+"</p>", nil)
@@ -300,6 +320,16 @@ func TestBridge(t *testing.T) {
 		_ = c.call("POST", "/_matrix/client/v3/rooms/"+dm+"/receipt/m.read/"+newest["event_id"].(string), map[string]any{}, nil)
 		if !until(wait, func() bool { return len(e.writes("POST", "/markChatReadForUser")) == 1 }) {
 			t.Error("reading the newest message did not mark the chat read")
+		}
+		// A receipt within readGap of that mark is held until the gap ends, not dropped.
+		fake.Say(fakegraph.ChatDM, fakegraph.Bea, "<p>right after</p>", nil)
+		var after map[string]any
+		if !until(wait, func() bool { after = c.find(dm, isBody("right after")); return after != nil }) {
+			t.Fatal("never came")
+		}
+		_ = c.call("POST", "/_matrix/client/v3/rooms/"+dm+"/receipt/m.read/"+after["event_id"].(string), map[string]any{}, nil)
+		if !until(wait, func() bool { return len(e.writes("POST", "/markChatReadForUser")) == 2 }) {
+			t.Error("a receipt inside the gap was dropped")
 		}
 	})
 
