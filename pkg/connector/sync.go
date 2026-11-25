@@ -120,14 +120,24 @@ func (tc *TeamsClient) syncNewChat(ctx context.Context, chat *graphChat, st *Cha
 	if err != nil {
 		return err
 	}
-	tc.UserLogin.QueueRemoteEvent(&simplevent.ChatResync{
-		EventMeta: simplevent.EventMeta{
-			Type:         bridgev2.RemoteEventChatResync,
-			PortalKey:    makePortalKey(chat.ID, tc.UserLogin.ID),
-			CreatePortal: true,
-		},
-		ChatInfo: info,
-	})
+	// The room is made here, one chat after another. Left to bridgev2, rooms of several new chats are made
+	// at once, and Tuwunel gives two rooms the bot creates in the same millisecond the same ID (room
+	// version 12 names a room by its create event).
+	key := makePortalKey(chat.ID, tc.UserLogin.ID)
+	portal, err := tc.Main.Bridge.GetPortalByKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if portal.MXID == "" && tc.Main.Bridge.Config.PortalCreateFilter.ShouldAllow(tc.UserLogin.ID, key) {
+		if err = portal.CreateMatrixRoom(ctx, tc.UserLogin, info); err != nil {
+			return err // the chat stays unknown, so the next sync tries again
+		}
+	} else {
+		tc.UserLogin.QueueRemoteEvent(&simplevent.ChatResync{
+			EventMeta: simplevent.EventMeta{Type: bridgev2.RemoteEventChatResync, PortalKey: key, CreatePortal: true},
+			ChatInfo:  info,
+		})
+	}
 	var page graphPage[graphMessage]
 	n := tc.Main.Config.InitialMessages
 	if n <= 0 {
