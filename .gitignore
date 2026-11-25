@@ -1,0 +1,10 @@
+*.yaml
+!.pre-commit-config.yaml
+!example-config.yaml
+!.github/workflows/*.yml
+*.db*
+*.log
+/matrix-teams
+/logs
+GOAL-*.md
+overenie/

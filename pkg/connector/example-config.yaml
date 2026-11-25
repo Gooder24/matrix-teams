@@ -1,0 +1,20 @@
+# Microsoft Graph API base address. Only change it for testing.
+graph_url: https://graph.microsoft.com/v1.0
+# Microsoft identity platform address. Only change it for testing.
+login_url: https://login.microsoftonline.com
+# OAuth client used for signing in. The default is Microsoft's own public
+# "Microsoft Graph Command Line Tools" client, so no app registration is needed.
+# If your organization blocks it, register a public client app in Entra ID with
+# the redirect URI http://localhost and put its ID here.
+client_id: 14d82eec-204b-4c2f-b7e8-296a70dab67e
+# Tenant to sign in to: "organizations" for any work or school account, or a tenant ID.
+tenant: organizations
+# How often to check Teams for new messages. Microsoft Graph has no push for
+# chats without an own app, so the bridge polls.
+poll_interval: 20s
+# When a chat is seen for the first time, bridge at most this many of its
+# latest messages, and only those newer than initial_days.
+initial_messages: 20
+initial_days: 14
+# Files larger than this are sent as a link instead of being bridged.
+max_file_size: 26214400
