@@ -198,6 +198,20 @@ func (tc *TeamsClient) handleMessages(ctx context.Context, chatID string, st *Ch
 	return nil
 }
 
+// ensureRoom makes the room of a chat that has none yet (an old chat somebody wrote in again) before its
+// message is queued, one chat after another, like syncNewChat does for new chats.
+func (tc *TeamsClient) ensureRoom(ctx context.Context, key networkid.PortalKey) error {
+	portal, err := tc.Main.Bridge.GetPortalByKey(ctx, key)
+	if err != nil || portal.MXID != "" || !tc.Main.Bridge.Config.PortalCreateFilter.ShouldAllow(tc.UserLogin.ID, key) {
+		return err
+	}
+	info, err := tc.GetChatInfo(ctx, portal)
+	if err != nil {
+		return err
+	}
+	return portal.CreateMatrixRoom(ctx, tc.UserLogin, info)
+}
+
 func (tc *TeamsClient) handleMessage(ctx context.Context, chatID string, msg *graphMessage) error {
 	key := makePortalKey(chatID, tc.UserLogin.ID)
 	msgID := makeMessageID(chatID, msg.ID)
@@ -219,6 +233,9 @@ func (tc *TeamsClient) handleMessage(ctx context.Context, chatID string, msg *gr
 		if detail.Initiator != nil && detail.Initiator.User != nil {
 			base.Sender = tc.sender(detail.Initiator.User.ID)
 		}
+		if err = tc.ensureRoom(ctx, key); err != nil {
+			return err
+		}
 		base.Type, base.CreatePortal = bridgev2.RemoteEventMessage, true
 		tc.UserLogin.QueueRemoteEvent(&simplevent.Message[string]{
 			EventMeta: base, ID: msgID, Data: text,
@@ -239,6 +256,9 @@ func (tc *TeamsClient) handleMessage(ctx context.Context, chatID string, msg *gr
 		}
 		return nil
 	case len(existing) == 0:
+		if err = tc.ensureRoom(ctx, key); err != nil {
+			return err
+		}
 		base.Type, base.CreatePortal = bridgev2.RemoteEventMessage, true
 		defer func() {
 			if len(msg.Reactions) > 0 {
