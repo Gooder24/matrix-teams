@@ -84,8 +84,8 @@ The end-to-end test starts the bridge as its own process between a temporary
 [Tuwunel](https://github.com/matrix-construct/tuwunel) homeserver and `internal/fakegraph`, signs in,
 and checks every feature in both directions. Nothing reaches Microsoft or any other server.
 
-Measured with `E2E_MEASURE=5m` (signed in, polling every 20 s): see the numbers in the commit that
-added the measurement.
+`E2E_MEASURE=5m` measures the bridge signed in and polling every 20 s against the fake: on a laptop
+it used 19 MB of memory and about 1 s of CPU per hour.
 
 ## License
 
