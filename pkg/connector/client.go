@@ -35,8 +35,8 @@ type TeamsClient struct {
 	failing     map[string]*failure  // chat → its syncs that failed in a row; poll goroutine only
 }
 
-// failure: a chat whose sync keeps failing waits 1, 3, then 7 polls between tries, so a chat that is gone
-// or forbidden costs little and one that works again comes back within a few polls.
+// failure: a chat whose sync keeps failing is tried again on the next poll, then after 1, 3 and from then on 7
+// skipped polls, so a chat that is gone or forbidden costs little and one that works again comes back soon.
 type failure struct{ times, skip int }
 
 var (

@@ -69,6 +69,15 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 		recheck[page.Value[tc.rotate%len(page.Value)].ID] = true
 		tc.rotate++
 	}
+	listed := make(map[string]bool, len(page.Value))
+	for i := range page.Value {
+		listed[page.Value[i].ID] = true
+	}
+	for id := range tc.failing {
+		if !listed[id] {
+			delete(tc.failing, id) // out of the newest 50: it starts afresh if it comes back
+		}
+	}
 	for i := range page.Value {
 		chat := &page.Value[i]
 		if chat.LastMessagePreview == nil {
