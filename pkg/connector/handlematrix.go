@@ -263,10 +263,17 @@ func (tc *TeamsClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matri
 	if msg.EditTarget.PartID != "" {
 		return fmt.Errorf("%w: only the text of a Teams message can be edited", bridgev2.ErrEditsNotSupportedInPortal)
 	}
+	path := "/chats/" + url.PathEscape(chat) + "/messages/" + url.PathEscape(target)
+	// A PATCH replaces the whole body and attachment list: keep the files and pictures the message carries.
+	var original graphMessage
+	if err := tc.Graph.Do(ctx, http.MethodGet, path, nil, &original); err != nil {
+		return err
+	}
 	body := &outBody{}
 	body.Body.ContentType = "html"
 	body.Body.Content, body.Mentions = tc.teamsMarkup(msg.Content)
-	path := "/chats/" + url.PathEscape(chat) + "/messages/" + url.PathEscape(target)
+	body.Body.Content += keptParts(original.Body.Content)
+	body.Attachments = original.Attachments
 	if err := tc.Graph.Do(ctx, http.MethodPatch, path, body, nil); err != nil {
 		return err
 	}
@@ -276,6 +283,18 @@ func (tc *TeamsClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matri
 		msg.EditTarget.Metadata.(*MessageMetadata).EditedAt = current.editStamp()
 	}
 	return nil
+}
+
+// keptParts returns the attachment placeholders and hosted pictures of a Teams message body.
+func keptParts(content string) string {
+	var out strings.Builder
+	for _, m := range reAttachment.FindAllString(content, -1) {
+		out.WriteString(m)
+	}
+	for _, m := range reHostedImg.FindAllString(content, -1) {
+		out.WriteString(m)
+	}
+	return out.String()
 }
 
 func (tc *TeamsClient) PreHandleMatrixReaction(_ context.Context, msg *bridgev2.MatrixReaction) (bridgev2.MatrixReactionPreResponse, error) {
@@ -306,18 +325,20 @@ func (tc *TeamsClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridg
 }
 
 // HandleMatrixReadReceipt marks the chat read in Teams only once the user has read its newest message
-// from someone else, and only if every recent message from others is already in the room:
+// from someone else, and only if every message from others since the room began is in the room:
 // Teams' read state is per chat, so an earlier receipt would mark unseen messages as seen.
+// History older than the room's first bridged message was never bridged and does not count.
 func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2.MatrixReadReceipt) error {
 	chat := chatOf(msg.Portal)
-	tc.readLock.Lock()
-	if time.Since(tc.lastRead[chat]) < readGap {
-		tc.readLock.Unlock()
-		return nil
+	if err := tc.waitReadGap(ctx, chat); err != nil {
+		return err
 	}
-	tc.readLock.Unlock()
+	first, err := tc.Main.Bridge.DB.Message.GetFirstPortalMessage(ctx, msg.Portal.PortalKey)
+	if err != nil || first == nil {
+		return err
+	}
 	var page graphPage[graphMessage]
-	if err := tc.Graph.Do(ctx, http.MethodGet, "/chats/"+url.PathEscape(chat)+"/messages?$top=50&$orderby=createdDateTime%20desc", nil, &page); err != nil {
+	if err = tc.Graph.Do(ctx, http.MethodGet, "/chats/"+url.PathEscape(chat)+"/messages?$top=50&$orderby=createdDateTime%20desc", nil, &page); err != nil {
 		return err
 	}
 	var newest *graphMessage
@@ -325,6 +346,9 @@ func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 		m := &page.Value[i]
 		if m.MessageType != "message" || m.DeletedDateTime != nil || m.senderID() == "" || makeUserID(m.senderID()) == tc.ownID() {
 			continue
+		}
+		if newest != nil && m.CreatedDateTime.Before(first.Timestamp.Truncate(time.Millisecond)) {
+			break
 		}
 		part, err := tc.Main.Bridge.DB.Message.GetFirstPartByID(ctx, tc.UserLogin.ID, makeMessageID(chat, m.ID))
 		if err != nil {
@@ -342,6 +366,29 @@ func (tc *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev
 	tc.readLock.Lock()
 	tc.lastRead[chat] = time.Now()
 	tc.readLock.Unlock()
-	req := map[string]any{"user": map[string]string{"id": string(tc.ownID()), "tenantId": tc.meta().TenantID}}
+	m := tc.meta()
+	m.mu.Lock()
+	tenant := m.TenantID
+	m.mu.Unlock()
+	req := map[string]any{"user": map[string]string{"id": string(tc.ownID()), "tenantId": tenant}}
 	return tc.Graph.Do(ctx, http.MethodPost, "/chats/"+url.PathEscape(chat)+"/markChatReadForUser", req, nil)
+}
+
+// waitReadGap keeps marks of one chat readGap apart. A receipt inside the gap waits for its end
+// instead of being dropped, so the last receipt of a burst still reaches Teams.
+func (tc *TeamsClient) waitReadGap(ctx context.Context, chat string) error {
+	tc.readLock.Lock()
+	wait := readGap - time.Since(tc.lastRead[chat])
+	tc.readLock.Unlock()
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

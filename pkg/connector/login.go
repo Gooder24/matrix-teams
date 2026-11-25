@@ -182,7 +182,9 @@ func (tl *TeamsLogin) SubmitUserInput(ctx context.Context, input map[string]stri
 	}
 	meta := &UserLoginMetadata{TenantID: tid}
 	graph := tl.Main.newGraph(meta, nil)
+	meta.mu.Lock()
 	graph.apply(tok)
+	meta.mu.Unlock()
 	var me graphUser
 	if err = graph.Do(ctx, http.MethodGet, "/me?$select=id,displayName,mail,userPrincipalName", nil, &me); err != nil {
 		return nil, fmt.Errorf("failed to read your profile: %w", err)

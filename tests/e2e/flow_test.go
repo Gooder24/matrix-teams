@@ -39,7 +39,7 @@ func TestBridge(t *testing.T) {
 		return e["type"] == "m.room.name" && str(e, "content", "name") == "Physics project"
 	})
 	homework := c.find(dm, isBody("do you have the"))
-	homeworkTeams := fake.Messages(fakegraph.ChatDM)[0]["id"].(string)
+	homeworkTeams := fake.Messages(fakegraph.ChatDM)[1]["id"].(string)
 
 	t.Run("incoming history", func(t *testing.T) {
 		if !strings.Contains(str(homework, "content", "formatted_body"), "<b>homework</b>") || !strings.Contains(str(homework, "content", "body"), "😀") {
@@ -57,6 +57,9 @@ func TestBridge(t *testing.T) {
 		}
 		if c.roomWhere(isBody("long ago")) != "" {
 			t.Errorf("a 40 days old chat was bridged")
+		}
+		if c.find(dm, isBody("three weeks ago")) != nil {
+			t.Errorf("a message older than initial_days was bridged")
 		}
 	})
 	t.Run("ghost profile", func(t *testing.T) {
@@ -238,13 +241,23 @@ func TestBridge(t *testing.T) {
 			"m.new_content": map[string]any{"msgtype": "m.text", "body": "hello again"},
 			"m.relates_to":  map[string]any{"rel_type": "m.replace", "event_id": mine["event_id"]}})
 		reaction := c.send(dm, "m.reaction", map[string]any{"m.relates_to": map[string]any{"rel_type": "m.annotation", "event_id": homework["event_id"], "key": "👍"}})
+		file := c.find(dm, isBody("notes.bin"))
+		c.send(dm, "m.room.message", map[string]any{"msgtype": "m.text", "body": "* the notes",
+			"m.new_content": map[string]any{"msgtype": "m.text", "body": "the notes"},
+			"m.relates_to":  map[string]any{"rel_type": "m.replace", "event_id": file["event_id"]}})
 		if !until(wait, func() bool {
-			return len(e.writes("PATCH", "/messages/")) == 1 && len(e.writes("POST", "/setReaction")) == 1
+			return len(e.writes("PATCH", "/messages/")) == 2 && len(e.writes("POST", "/setReaction")) == 1
 		}) {
 			t.Fatalf("edit or reaction never sent: %v", e.fake.Log())
 		}
 		if got := str(e.writes("PATCH", "/messages/")[0].Body, "body", "content"); got != "hello again" {
 			t.Errorf("edit: %q", got)
+		}
+		// Teams replaces the attachment list on PATCH: an edited file message must keep its file.
+		fileEdit := e.writes("PATCH", "/messages/")[1].Body
+		atts, _ := fileEdit["attachments"].([]any)
+		if got := str(fileEdit, "body", "content"); !strings.HasPrefix(got, "the notes<attachment id=") || len(atts) != 1 || str(atts[0], "name") != "notes.bin" {
+			t.Errorf("file edit lost its attachment: %v", fileEdit)
 		}
 		if got := str(e.writes("POST", "/setReaction")[0].Body, "reactionType"); got != "like" {
 			t.Errorf("reaction type %q", got)

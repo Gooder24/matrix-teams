@@ -53,8 +53,6 @@ func (tc *TeamsClient) pollLoop(ctx context.Context) {
 	}
 }
 
-func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
-
 func (tc *TeamsClient) poll(ctx context.Context) error {
 	var page graphPage[graphChat]
 	err := tc.Graph.Do(ctx, http.MethodGet, "/me/chats?$expand=lastMessagePreview&$orderby=lastMessagePreview/createdDateTime%20desc&$top=50", nil, &page)
@@ -62,9 +60,6 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 		return err
 	}
 	meta := tc.meta()
-	if meta.Chats == nil {
-		meta.Chats = make(map[string]*ChatState)
-	}
 	initialCutoff := time.Now().AddDate(0, 0, -tc.Main.Config.InitialDays)
 	recheck := make(map[string]bool)
 	for i := 0; i < recheckActive && i < len(page.Value); i++ {
@@ -74,44 +69,49 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 		recheck[page.Value[tc.rotate%len(page.Value)].ID] = true
 		tc.rotate++
 	}
-	changed := false
 	for i := range page.Value {
 		chat := &page.Value[i]
 		if chat.LastMessagePreview == nil {
 			continue
 		}
-		preview := stamp(chat.LastMessagePreview.CreatedDateTime)
-		st := meta.Chats[chat.ID]
-		if st == nil {
-			st = &ChatState{}
-			meta.Chats[chat.ID] = st
-			changed = true
-			if chat.LastMessagePreview.CreatedDateTime.Before(initialCutoff) {
-				// An old chat gets a room once somebody writes in it again.
-				st.Preview, st.Cursor = preview, preview
-				continue
-			}
-			if err = tc.syncNewChat(ctx, chat, st); err != nil {
+		if err = tc.pollChat(ctx, meta, chat, initialCutoff, recheck[chat.ID]); err != nil {
+			var te ThrottledError
+			if errors.Is(err, ErrAuth) || errors.As(err, &te) || ctx.Err() != nil {
 				return err
 			}
-			st.Preview = preview
-			continue
+			// One chat that fails (gone, forbidden, a bad message) must not stop the others.
+			zerolog.Ctx(ctx).Warn().Err(err).Str("chat_id", chat.ID).Msg("Failed to sync Teams chat")
 		}
-		if st.Preview == preview && !recheck[chat.ID] {
-			continue
-		}
-		if err = tc.syncChanges(ctx, chat.ID, st); err != nil {
-			return err
-		}
-		if st.Preview != preview {
-			st.Preview = preview
-			changed = true
-		}
-	}
-	if changed {
-		return tc.UserLogin.Save(ctx)
 	}
 	return nil
+}
+
+func (tc *TeamsClient) pollChat(ctx context.Context, meta *UserLoginMetadata, chat *graphChat, initialCutoff time.Time, recheck bool) error {
+	preview := stamp(chat.LastMessagePreview.CreatedDateTime)
+	st, known := meta.chat(chat.ID)
+	switch {
+	case !known && chat.LastMessagePreview.CreatedDateTime.Before(initialCutoff):
+		// An old chat gets a room once somebody writes in it again.
+		st.Preview, st.Cursor = preview, preview
+	case !known:
+		if err := tc.syncNewChat(ctx, chat, &st); err != nil {
+			return err
+		}
+		st.Preview = preview
+	case st.Preview == preview && !recheck:
+		return nil
+	default:
+		before := st
+		if err := tc.syncChanges(ctx, chat.ID, &st); err != nil {
+			return err
+		}
+		st.Preview = preview
+		if st == before {
+			return nil
+		}
+	}
+	meta.setChat(chat.ID, st)
+	return tc.UserLogin.Save(ctx)
 }
 
 func (tc *TeamsClient) syncNewChat(ctx context.Context, chat *graphChat, st *ChatState) error {
@@ -167,6 +167,7 @@ func (tc *TeamsClient) syncChanges(ctx context.Context, chatID string, st *ChatS
 	return tc.handleMessages(ctx, chatID, st, msgs)
 }
 
+// handleMessages queues the messages oldest first and moves st's cursor past them; the caller stores st.
 func (tc *TeamsClient) handleMessages(ctx context.Context, chatID string, st *ChatState, msgs []graphMessage) error {
 	sort.Slice(msgs, func(i, j int) bool {
 		if !msgs[i].CreatedDateTime.Equal(msgs[j].CreatedDateTime) {
@@ -174,19 +175,14 @@ func (tc *TeamsClient) handleMessages(ctx context.Context, chatID string, st *Ch
 		}
 		return msgs[i].ID < msgs[j].ID
 	})
-	cursor := st.Cursor
 	for i := range msgs {
 		msg := &msgs[i]
 		if err := tc.handleMessage(ctx, chatID, msg); err != nil {
 			return err
 		}
-		if s := stamp(msg.LastModifiedDateTime); s > cursor {
-			cursor = s
+		if s := stamp(msg.LastModifiedDateTime); s > st.Cursor {
+			st.Cursor = s
 		}
-	}
-	if cursor != st.Cursor {
-		st.Cursor = cursor
-		return tc.UserLogin.Save(ctx)
 	}
 	return nil
 }
@@ -244,7 +240,7 @@ func (tc *TeamsClient) handleMessage(ctx context.Context, chatID string, msg *gr
 				return tc.convertMessage(ctx, portal, intent, chatID, data)
 			},
 		})
-	case msg.editStamp() != "" && msg.editStamp() != existing[0].Metadata.(*MessageMetadata).EditedAt:
+	case msg.editStamp() != "" && msg.editStamp() != editedAt(existing):
 		base.Type = bridgev2.RemoteEventEdit
 		if msg.LastEditedDateTime != nil {
 			base.Timestamp = *msg.LastEditedDateTime
@@ -306,4 +302,14 @@ func (tc *TeamsClient) queueReactions(key networkid.PortalKey, msgID networkid.M
 		TargetMessage: msgID,
 		Reactions:     data,
 	})
+}
+
+// editedAt is the last edit bridged for a message, as kept on its text part.
+func editedAt(parts []*database.Message) string {
+	for _, part := range parts {
+		if part.PartID == "" {
+			return part.Metadata.(*MessageMetadata).EditedAt
+		}
+	}
+	return parts[0].Metadata.(*MessageMetadata).EditedAt
 }

@@ -71,13 +71,20 @@ func (tc *TeamsClient) Disconnect() {
 	}
 }
 
-func (tc *TeamsClient) IsLoggedIn() bool { return tc.meta().RefreshToken != "" }
+func (tc *TeamsClient) IsLoggedIn() bool {
+	m := tc.meta()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.RefreshToken != ""
+}
 
 // LogoutRemote forgets the tokens. Graph has no call that ends a refresh token of a public client;
 // it stops working when the user removes the app at myapps.microsoft.com or changes the password.
 func (tc *TeamsClient) LogoutRemote(ctx context.Context) {
 	m := tc.meta()
+	m.mu.Lock()
 	m.AccessToken, m.RefreshToken, m.Chats = "", "", nil
+	m.mu.Unlock()
 }
 
 func (tc *TeamsClient) IsThisUser(_ context.Context, userID networkid.UserID) bool {

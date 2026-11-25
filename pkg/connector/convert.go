@@ -30,6 +30,7 @@ var (
 	reAt         = regexp.MustCompile(`(?is)<at\b[^>]*\bid="?(\d+)"?[^>]*>(.*?)</at>`)
 	reImg        = regexp.MustCompile(`(?is)<img\b[^>]*>`)
 	reImgSrc     = regexp.MustCompile(`(?is)<img\b[^>]*\bsrc="([^"]+/hostedContents/[^"]+)"`)
+	reHostedImg  = regexp.MustCompile(`(?is)<img\b[^>]*\bsrc="[^"]+/hostedContents/[^"]+"[^>]*>`)
 	reDuration   = regexp.MustCompile(`^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.\d+)?S)?$`)
 )
 

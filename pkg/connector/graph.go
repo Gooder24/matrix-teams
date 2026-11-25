@@ -51,7 +51,8 @@ type Graph struct {
 	tc    *TeamsConnector
 	meta  *UserLoginMetadata
 	login *bridgev2.UserLogin // nil during sign-in
-	lock  sync.Mutex
+	// refresh lets one refresh run at a time; meta.mu guards the fields themselves.
+	refresh sync.Mutex
 }
 
 func (tc *TeamsConnector) newGraph(meta *UserLoginMetadata, login *bridgev2.UserLogin) *Graph {
@@ -94,6 +95,7 @@ func (tc *TeamsConnector) postToken(ctx context.Context, tenant string, form url
 	return &tok, nil
 }
 
+// apply stores a token answer. The caller holds g.meta.mu.
 func (g *Graph) apply(tok *tokenResponse) {
 	g.meta.AccessToken = tok.AccessToken
 	if tok.RefreshToken != "" {
@@ -107,17 +109,20 @@ func (g *Graph) apply(tok *tokenResponse) {
 
 // token returns a valid access token, refreshing it a minute before it expires.
 func (g *Graph) token(ctx context.Context) (string, error) {
-	g.lock.Lock()
-	defer g.lock.Unlock()
-	if g.meta.AccessToken != "" && time.Until(g.meta.Expiry.Time) > time.Minute {
-		return g.meta.AccessToken, nil
+	g.refresh.Lock()
+	defer g.refresh.Unlock()
+	g.meta.mu.Lock()
+	access, refresh, tenant, expiry := g.meta.AccessToken, g.meta.RefreshToken, g.meta.TenantID, g.meta.Expiry.Time
+	g.meta.mu.Unlock()
+	if access != "" && time.Until(expiry) > time.Minute {
+		return access, nil
 	}
-	if g.meta.RefreshToken == "" {
+	if refresh == "" {
 		return "", ErrAuth
 	}
-	tok, err := g.tc.postToken(ctx, g.meta.TenantID, url.Values{
+	tok, err := g.tc.postToken(ctx, tenant, url.Values{
 		"grant_type":    {"refresh_token"},
-		"refresh_token": {g.meta.RefreshToken},
+		"refresh_token": {refresh},
 		"scope":         {strings.Join(scopes, " ")},
 	})
 	if err != nil {
@@ -126,13 +131,15 @@ func (g *Graph) token(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
+	g.meta.mu.Lock()
 	g.apply(tok)
+	g.meta.mu.Unlock()
 	if g.login != nil {
 		if err = g.login.Save(ctx); err != nil {
 			return "", fmt.Errorf("failed to save refreshed token: %w", err)
 		}
 	}
-	return g.meta.AccessToken, nil
+	return tok.AccessToken, nil
 }
 
 func (g *Graph) url(path string) string {
@@ -215,9 +222,11 @@ func (g *Graph) raw(ctx context.Context, method, path string, body any, headers 
 		return nil, ThrottledError{RetryAfter: wait}
 	case http.StatusUnauthorized:
 		// The token was refused although it had not expired: drop it so the next call refreshes.
-		g.lock.Lock()
-		g.meta.AccessToken = ""
-		g.lock.Unlock()
+		g.meta.mu.Lock()
+		if g.meta.AccessToken == token {
+			g.meta.AccessToken = ""
+		}
+		g.meta.mu.Unlock()
 	}
 	var ge struct {
 		Error struct {

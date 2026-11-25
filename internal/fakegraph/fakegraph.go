@@ -110,7 +110,7 @@ func (s *Server) message(chatID, from, html string, at time.Time) map[string]any
 	}
 }
 
-// New starts the fake with three chats: a DM with Bea and a group from today, and a group
+// New starts the fake with three chats: a DM with Bea (with one message of three weeks ago) and a group from today, and a group
 // whose last message is 40 days old.
 func New() *Server {
 	s := &Server{
@@ -129,6 +129,8 @@ func New() *Server {
 	}
 	now := time.Now()
 	s.messages[ChatDM] = []map[string]any{
+		// Older than initial_days: never bridged, yet still in the chat for the read receipt to see.
+		s.message(ChatDM, Bea, "<p>three weeks ago</p>", now.Add(-21*24*time.Hour)),
 		s.message(ChatDM, Bea, `<p>Hi, do you have the <b>homework</b>? <emoji alt="😀"></emoji></p>`, now.Add(-time.Hour)),
 		s.message(ChatDM, Me, "<p>I do, sending it tonight</p>", now.Add(-50*time.Minute)),
 	}
@@ -461,6 +463,11 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, path string, body
 		}
 		if r.Method == http.MethodPatch {
 			m["body"] = body["body"]
+			if a, ok := body["attachments"]; ok {
+				m["attachments"] = a
+			} else {
+				m["attachments"] = []any{}
+			}
 			m["lastEditedDateTime"] = stamp(time.Now())
 			touch(m)
 			s.send(w, 204, nil)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestReactions(t *testing.T) {
@@ -67,5 +68,21 @@ func TestMessageID(t *testing.T) {
 	chat, msg := parseMessageID(makeMessageID("19:abc@thread.v2", "1700000000000"))
 	if chat != "19:abc@thread.v2" || msg != "1700000000000" {
 		t.Errorf("%q %q", chat, msg)
+	}
+}
+
+func TestKeptParts(t *testing.T) {
+	body := `<p>old text</p><attachment id="abc"></attachment><img src="https://graph.test/v1.0/chats/x/messages/1/hostedContents/aW1n/$value" alt="pic"><img src="https://example.test/emoji.png">`
+	want := `<attachment id="abc"></attachment><img src="https://graph.test/v1.0/chats/x/messages/1/hostedContents/aW1n/$value" alt="pic">`
+	if got := keptParts(body); got != want {
+		t.Errorf("keptParts = %q", got)
+	}
+}
+
+func TestStampSortsAsText(t *testing.T) {
+	a := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	b := a.Add(100 * time.Millisecond)
+	if stamp(a) != "2026-11-25T10:00:00.000Z" || stamp(a) >= stamp(b) {
+		t.Errorf("stamps %q and %q do not sort", stamp(a), stamp(b))
 	}
 }
