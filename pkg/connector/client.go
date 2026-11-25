@@ -32,7 +32,12 @@ type TeamsClient struct {
 	lastRead    map[string]time.Time // chat → when Teams last got a mark
 	pendingRead map[string]time.Time // chat → newest receipt that waits for the end of readGap
 	names       sync.Map             // ghost ID → display name from chat member lists
+	failing     map[string]*failure  // chat → its syncs that failed in a row; poll goroutine only
 }
+
+// failure: a chat whose sync keeps failing waits 1, 3, then 7 polls between tries, so a chat that is gone
+// or forbidden costs little and one that works again comes back within a few polls.
+type failure struct{ times, skip int }
 
 var (
 	_ bridgev2.NetworkAPI                    = (*TeamsClient)(nil)

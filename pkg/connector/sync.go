@@ -74,6 +74,10 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 		if chat.LastMessagePreview == nil {
 			continue
 		}
+		if f := tc.failing[chat.ID]; f != nil && f.skip > 0 {
+			f.skip--
+			continue
+		}
 		if err = tc.pollChat(ctx, meta, chat, initialCutoff, recheck[chat.ID]); err != nil {
 			var te ThrottledError
 			if errors.Is(err, ErrAuth) || errors.As(err, &te) || ctx.Err() != nil {
@@ -81,6 +85,18 @@ func (tc *TeamsClient) poll(ctx context.Context) error {
 			}
 			// One chat that fails (gone, forbidden, a bad message) must not stop the others.
 			zerolog.Ctx(ctx).Warn().Err(err).Str("chat_id", chat.ID).Msg("Failed to sync Teams chat")
+			if tc.failing == nil {
+				tc.failing = map[string]*failure{}
+			}
+			f := tc.failing[chat.ID]
+			if f == nil {
+				f = &failure{}
+				tc.failing[chat.ID] = f
+			}
+			f.times++
+			f.skip = min(1<<min(f.times-1, 3), 8) - 1
+		} else {
+			delete(tc.failing, chat.ID)
 		}
 	}
 	return nil

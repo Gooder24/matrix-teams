@@ -79,6 +79,7 @@ type Server struct {
 	drive     map[string][]byte
 	uploads   map[string]*upload
 	Fail      map[string]int // "METHOD path-regex" → status
+	seen      []string       // "METHOD path" of every Graph request
 }
 
 type upload struct {
@@ -150,6 +151,27 @@ func (s *Server) find(chatID, id string) map[string]any {
 }
 
 func touch(m map[string]any) { m["lastModifiedDateTime"] = stamp(time.Now()) }
+
+// Count is how many Graph requests so far matched "METHOD path-regex".
+func (s *Server) Count(pattern string) (n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	re := regexp.MustCompile(pattern)
+	for _, r := range s.seen {
+		if re.MatchString(r) {
+			n++
+		}
+	}
+	return n
+}
+
+// AddChat adds a group chat with one message from the first member, as if it were made just now.
+func (s *Server) AddChat(id, topic string, members ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chats[id] = &chat{id, topic, "group", append([]string{Me}, members...)}
+	s.messages[id] = []map[string]any{s.message(id, members[0], "<p>hello from "+topic+"</p>", time.Now())}
+}
 
 // SetFail makes requests matching "METHOD path-regex" answer code; code 0 removes the rule.
 func (s *Server) SetFail(pattern string, code int) {
@@ -366,6 +388,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path = strings.TrimPrefix(path, "/v1.0")
+	s.seen = append(s.seen, r.Method+" "+path)
 	for pattern, code := range s.Fail {
 		if regexp.MustCompile(pattern).MatchString(r.Method + " " + path) {
 			if code == 429 {

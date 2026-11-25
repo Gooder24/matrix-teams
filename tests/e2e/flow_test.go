@@ -198,6 +198,23 @@ func TestBridge(t *testing.T) {
 		}
 	})
 
+	t.Run("a chat that keeps failing is asked less often", func(t *testing.T) {
+		const broken, members = "19:broken@thread.v2", `^GET /chats/19:broken@thread\.v2/members$`
+		fake.SetFail(members, 403)
+		fake.AddChat(broken, "Broken group", fakegraph.Dana)
+		start, polls := fake.Count(members), fake.Count(`^GET /me/chats$`)
+		if !until(wait, func() bool { return fake.Count(`^GET /me/chats$`)-polls >= 20 }) {
+			t.Fatal("the bridge stopped polling")
+		}
+		if n := fake.Count(members) - start; n == 0 || n > 8 {
+			t.Errorf("a chat that keeps failing was read %d times in 20 polls", n)
+		}
+		fake.SetFail(members, 0)
+		if !until(wait, func() bool { return c.roomWhere(isBody("hello from Broken group")) != "" }) {
+			t.Error("the chat never came once it worked again")
+		}
+	})
+
 	// sync waits until the bridge has polled the DM once more after a write, for checks that something did not happen.
 	sync := func(t *testing.T, tag string) {
 		fake.Say(fakegraph.ChatDM, fakegraph.Bea, "<p>sentinel "+tag+"</p>", nil)
